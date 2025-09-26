@@ -61,24 +61,27 @@ int main() {
                                      .to(device);
     std::cout << "Tensor loaded successfully. Shape: " << input_tensor.sizes() << std::endl;
 
-    torch::inductor::AOTIModelPackageLoader loader("../toy_test/residual_block.pt2");
+    torch::inductor::AOTIModelPackageLoader loader("/home/eklasky/model.pt2");
     std::vector<torch::Tensor> inputs = {input_tensor};
+    std::vector<torch::Tensor> outputs = loader.run(inputs);
     
-std::vector<torch::Tensor> outputs = loader.run(inputs);
+    
+    if (outputs.size() != 2) {
+        std::cerr << "Error: Expected 2 output tensors, but got " << outputs.size() << std::endl;
+        return 1;
+    }
 
-if (outputs.empty()) {
-    std::cerr << "Error: No output tensors received." << std::endl;
-    return 1;
-}
+    
+    torch::Tensor output1 = outputs[0];
+    torch::Tensor output2 = outputs[1];
 
-// Save all outputs dynamically
-for (size_t i = 0; i < outputs.size(); ++i) {
-    std::cout << "Output " << i+1 << " shape: " << outputs[i].sizes() << std::endl;
-    save_tensor_to_bin(outputs[i], "output" + std::to_string(i+1) + ".bin");
-}
+    std::cout << "Inference successful. Received 2 output tensors." << std::endl;
+    std::cout << "Output 1 shape: " << output1.sizes() << std::endl;
+    std::cout << "Output 2 shape: " << output2.sizes() << std::endl;
 
-std::cout << "Inference successful. Received " << outputs.size() << " output tensor(s)." << std::endl;
-
+    
+    save_tensor_to_bin(output1, "output1.bin");
+    save_tensor_to_bin(output2, "output2.bin");
 
     return 0;
 }
