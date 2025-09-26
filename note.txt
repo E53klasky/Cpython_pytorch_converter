@@ -1,0 +1,11 @@
+
+not this one but the one in home local
+
+use python3.10 or python3.11
+
+I am not 100% sure about python3.12 
+
+get pytorch if using cuda cu12.8
+
+
+pytorch 2.8 is good for the compiiers use this one from the pip intall

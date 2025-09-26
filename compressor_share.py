@@ -6,7 +6,7 @@
 
 import os
 import numpy as np
-import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt
 import torch
 from torch.utils.data import Dataset, TensorDataset, DataLoader
 
@@ -17,7 +17,7 @@ from torch.utils.data import Dataset, TensorDataset, DataLoader
 # Export program
 
 
-# In[10]:
+# In[2]:
 
 
 from CAESAR.models.network_components import ResnetBlock, FlexiblePrior, Downsample, Upsample
@@ -30,12 +30,10 @@ import torch.nn.init as init
 from CAESAR.models.RangeEncoding import RangeCoder
 
 
-#  compress_modules3d_mid_SR.py  -----------------------------------------------------------------------------------------------------------------------------------------
 def load_yaml(file_path):
     with open(file_path, 'r') as file:
         data = yaml.safe_load(file)
     return data
-
 
 def super_resolution_model(img_size = 64, in_chans=32, out_chans=1, sr_dim = "HAT", pretrain = False, sr_type = "BCRN"):
 
@@ -59,6 +57,8 @@ def reshape_batch_3d_2d(batch_data):
     B,C,T,H,W = batch_data.shape
     batch_data = batch_data.permute([0,2,1,3,4]).reshape([B*T,C,H,W])
     return batch_data
+
+
 
 class Compressor(nn.Module):
     def __init__(
@@ -104,33 +104,36 @@ class Compressor(nn.Module):
         self.hyper_dec = nn.ModuleList([])
 
     def encode(self, x):
-
-        self.t_dim = x.shape[2]
-
-        for i, (resnet, down) in enumerate(self.enc): # [b, 1, t, 256, 256]
-            if i==0:
-                x = x.permute(0,2,1,3,4)
-                x = x.reshape(-1, *x.shape[2:]) # [b*t, 1, 256, 256]
-            if i==2:
-                x = x.reshape(-1, self.t_dim, *x.shape[1:])
-                x = x.permute(0,2,1,3,4) # [b, c, t, h, w]
-
+        if x.dim() == 6:  # drop useless singleton
+            N, C, T, one, H, W = x.shape
+            x = x.view(N, C, T, H, W)
+        elif x.dim() == 5:
+            N, C, T, H, W = x.shape
+        else:
+            raise ValueError(f"Unexpected input shape: {x.shape}")
+        # Process through encoder layers
+        for i, (resnet, down) in enumerate(self.enc):
+            # First two layers are 2D (ind < 2), later ones are 3D (ind >= 2)
+            if i < 2:
+                # For 2D layers, flatten time dimension
+                if x.dim() == 5:  # [N, C, T, H, W]
+                    x = x.permute(0, 2, 1, 3, 4).reshape(N*T, C, H, W)  # [N*T, C, H, W]
+            else:
+                # For 3D layers, restore time dimension if needed
+                if x.dim() == 4:  # [N*T, C, H, W]
+                    x = x.reshape(N, T, -1, *x.shape[2:]).permute(0, 2, 1, 3, 4)  # [N, C, T, H, W]
+            
             x = resnet(x)
             x = down(x)
-
-
-        x = x.permute(0,2,1,3,4)
-        x = x.reshape(-1, *x.shape[2:])
-
         latent = x
         return latent
 
 
-
     def hyper_encode(self, x):
-
-
-
+        # If input is 5D [B, C, T, H, W], flatten to 4D for 2D convolutions
+        if x.dim() == 5:
+            B, C, T, H, W = x.shape
+            x = x.permute(0, 2, 1, 3, 4).reshape(B*T, C, H, W)  # [B*T, C, H, W]
 
         for i, (conv, act) in enumerate(self.hyper_enc):
             x = conv(x)
@@ -140,7 +143,7 @@ class Compressor(nn.Module):
         return hyper_latent
 
 
-    def hyper_decode(self, x): 
+    def hyper_decode(self, x):
 
         for i, (deconv, act) in enumerate(self.hyper_dec):
             x = deconv(x)
@@ -151,13 +154,23 @@ class Compressor(nn.Module):
         return mean, scale
 
 
-    def decode(self, x): # [n*t, c, h,w ] [8, 256, 16, 16]
+    def decode(self, x, t_dim=None): # [n*t, c, h,w ] [8, 256, 16, 16]
         # output = []
+        
+        # If t_dim not provided, try to infer from the current tensor shape
+        # This is a workaround for the export limitation
+        if t_dim is None:
+            # Assume t_dim based on tensor shape - this may need adjustment
+            # based on your specific use case
+            if hasattr(self, '_last_t_dim'):
+                t_dim = self._last_t_dim
+            else:
+                t_dim = 8  # fallback value - adjust as needed
 
         for i, (resnet, up) in enumerate(self.dec):
 
             if i==0:
-                x = x.reshape(-1, self.t_dim//4, *x.shape[1:])
+                x = x.reshape(-1, t_dim//4, *x.shape[1:])
                 x = x.permute(0,2,1,3,4) # [b, c, t, h, w]
 
             if i==2:
@@ -171,10 +184,11 @@ class Compressor(nn.Module):
 
 
     def compress(self, x, return_latent = False, real = False, return_time = False):
+        '''
         if self.range_coder is None:
             _quantized_cdf, _cdf_length, _offset = self.prior._update(30)
             self.range_coder = RangeCoder(_quantized_cdf = _quantized_cdf, _cdf_length= _cdf_length, _offset= _offset, medians = self.prior.medians.detach())
-
+        '''
         B,C,T,H,W = x.shape
         original_shape = x.shape
 
@@ -184,8 +198,8 @@ class Compressor(nn.Module):
 
         latent = self.encode(x)
         hyper_latent = self.hyper_encode(latent)
-        q_hyper_latent = quantize(hyper_latent, "dequantize", self.prior.medians)
-        mean, scale = self.hyper_decode(q_hyper_latent)
+        #q_hyper_latent = quantize(hyper_latent, "dequantize", self.prior.medians)
+        #mean, scale = self.hyper_decode(q_hyper_latent)
         '''
         if return_time:
             torch.cuda.synchronize()  # Wait for all GPU ops to finish
@@ -227,7 +241,7 @@ class Compressor(nn.Module):
         q_latent = self.range_coder.decompress(latent_string, mean.detach().cpu(), scale.detach().cpu())
         q_latent = q_latent.to(device)
 
-        return self.decode(q_latent)
+        return self.decode(q_latent, T)
 
 
     def bpp(self, shape, state4bpp):
@@ -263,9 +277,8 @@ class Compressor(nn.Module):
 
         # q_latent, q_hyper_latent, state4bpp, mean = self.encode(x)
 
-
         latent = self.encode(x)
-        hyper_latent = self.hyper_encode(latent) 
+        hyper_latent = self.hyper_encode(latent)
         q_hyper_latent = quantize(hyper_latent, "dequantize", self.prior.medians)
         mean, scale = self.hyper_decode(q_hyper_latent)
         q_latent = quantize(latent, "dequantize", mean.detach())
@@ -277,7 +290,7 @@ class Compressor(nn.Module):
 
 
 
-        state4bpp = {"latent": latent, "hyper_latent":hyper_latent, "mean":mean, "scale":scale }    
+        state4bpp = {"latent": latent, "hyper_latent":hyper_latent, "mean":mean, "scale":scale }
         frame_bit, bpp = self.bpp(x.shape, state4bpp)
 
 
@@ -286,7 +299,7 @@ class Compressor(nn.Module):
             torch.cuda.synchronize()  # Wait for all GPU ops to finish
             start_time = time.time()
 
-        output = self.decode(q_latent)
+        output = self.decode(q_latent, x.shape[2])  # Pass T dimension from original input
 
         if return_time:
             torch.cuda.synchronize()  # Wait for all GPU ops to finish
@@ -453,7 +466,7 @@ class CompressorMix(nn.Module):
 
         #compressed_latent, latent_bytes = self.compress_caesar_v(x)
         latent, hyper_latent = self.compress(x)
-        #latent_bytes = torch.sum(outputs["bpf_real"])                
+        #latent_bytes = torch.sum(outputs["bpf_real"])
         #compressed_latent = outputs["compressed"]
 
         #original_data = dataset_org.original_data()
@@ -491,13 +504,13 @@ class CompressorMix(nn.Module):
         return outputs
 
     def decode(self, x, batch_size):
-        x = self.entropy_model.decode(x)
+        x = self.entropy_model.decode(x, 8)  # Pass t_dim - adjust as needed
         x = self.sr_model(x)
         x = reshape_batch_2d_3d(x, batch_size)
         return x
-# end of compress_modules3d_mid_SR.py -----------------------------------------------------------------------------------------------------------------------------------
 
-# In[36]:
+
+# In[3]:
 
 
 from collections import OrderedDict
@@ -520,14 +533,12 @@ model = CompressorMix(
             sr_dim=16
         )
 
-#  compressor --------------------------------------------------------------------------------------------------------------------------------------------------------------
-# _load_caesar_v_compressor method under loaded model?????????????????
-state_dict = remove_module_prefix(torch.load('./pretrained/caesar_v.pt', map_location='cuda'))
+state_dict = remove_module_prefix(torch.load('/lustre/blue/ranka/eklasky/newModel/pretrained/caesar_v.pt', map_location='cuda'))
 #state_dict = torch.load('./pretrained/caesar_v.pt', map_location='cuda')
 model.load_state_dict(state_dict)
-# done compressor --------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-# In[50]:
+
+# In[4]:
 
 
 model.eval()
@@ -543,12 +554,19 @@ with torch.no_grad():
     # Depending on your use case, e.g. if your training platform and inference platform
     # are different, you may choose to save the exported model using torch.export.save and
     # then load it back using torch.export.load on your inference platform to run AOT compilation.
-    output_path = torch._inductor.aoti_compile_and_package(
-        exported,
-        # [Optional] Specify the generated shared library path. If not specified,
-        # the generated artifact is stored in your system temp directory.
-        package_path=os.path.join(os.getcwd(), "model.pt2"),
-    )
+    
+    # Check PyTorch version and use appropriate method
+    print(f"PyTorch version: {torch.__version__}")
+    
+    if hasattr(torch._inductor, 'aoti_compile_and_package'):
+        import os
+        output_path = torch._inductor.aoti_compile_and_package(exported, package_path="/home/eklasky/model.pt2")
+        print(f"Model compiled and packaged at: {output_path}")
+
+
+    else:
+        torch.export.save(exported, "exported_model.pt2")
+        print("Exported model saved as exported_model.pt2")
 
 
 # In[ ]:
@@ -556,3 +574,5 @@ with torch.no_grad():
 
 
 
+
+# In[ ]:
