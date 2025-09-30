@@ -45,16 +45,16 @@ int main() {
     config.n_overlap = 0;
 
     try {
-        // Load dataset
+  
         ScientificDataset dataset(config);
         std::cout << "Dataset loaded successfully! Size: " << dataset.size() << std::endl;
 
-        // Get first sample
+   
         auto sample = dataset.get_item(0);
         torch::Tensor input_tensor = sample["input"].to(device);
         std::cout << "Input tensor shape: " << input_tensor.sizes() << std::endl;
 
-        // Load AOTI model
+    
         torch::inductor::AOTIModelPackageLoader loader("/home/eklasky/model.pt2");
         std::vector<torch::Tensor> inputs = {input_tensor};
         std::vector<torch::Tensor> outputs = loader.run(inputs);
@@ -71,8 +71,8 @@ int main() {
         std::cout << "Output 1 shape: " << output1.sizes() << std::endl;
         std::cout << "Output 2 shape: " << output2.sizes() << std::endl;
 
-        // Calculate compression for first sample
-        size_t input_size = input_tensor.numel() * sizeof(float);
+ 
+        size_t input_size = input_tensor.numel() * sizeof(double);
         size_t output1_size = output1.numel() * sizeof(float);
         size_t output2_size = output2.numel() * sizeof(float);
         size_t total_compressed = output1_size + output2_size;
@@ -95,7 +95,7 @@ int main() {
         save_tensor_to_bin(output1, "output1.bin");
         save_tensor_to_bin(output2, "output2.bin");
 
-        // Process additional samples and accumulate statistics
+
         std::cout << "\n=== Processing Multiple Samples ===" << std::endl;
         int num_samples = std::min(5, static_cast<int>(dataset.size()));
         
@@ -132,7 +132,7 @@ int main() {
         std::cout << "Total space saved:     " << 100.0 * (1.0 - static_cast<double>(total_output_size) / total_input_size) 
                   << "%" << std::endl;
 
-        // Estimate for full dataset
+
         std::cout << "\n=== Full Dataset Projection (All " << dataset.size() << " Samples) ===" << std::endl;
         size_t projected_input = total_input_size * dataset.size() / num_samples;
         size_t projected_output = total_output_size * dataset.size() / num_samples;
